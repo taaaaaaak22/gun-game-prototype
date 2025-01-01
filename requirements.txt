@@ -4,3 +4,4 @@ opencv_contrib_python==4.10.0.84
 opencv_python==4.10.0.84
 Pillow==11.0.0
 ultralytics==8.3.55
+websocket-client==1.8.0

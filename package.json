@@ -1,0 +1,14 @@
+{
+  "name": "gun-game-prototype",
+  "version": "1.0.0",
+  "description": "YOLOv8 使ってみる",
+  "main": "socket.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

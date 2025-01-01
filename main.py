@@ -3,9 +3,16 @@ from ultralytics import YOLO
 import mediapipe as mp
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
+import websocket
+import json
+import threading
 
 # YOLOモデルのロード
 yolo_model = YOLO("yolov8n.pt")
+
+# YOLOのログを非表示にする
+import logging
+logging.getLogger('ultralytics').setLevel(logging.ERROR)
 
 # MediaPipe Poseのセットアップ
 mp_pose = mp.solutions.pose
@@ -18,6 +25,12 @@ FONT_PATH = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
 score = 0
 last_target_part = ""
 
+# ライフの初期化
+life = 5
+game_over = False
+damage_flash = False
+flash_counter = 0
+
 # 頭に該当するランドマークインデックスと部位名
 HEAD_PARTS = {
     0: "鼻", 1: "左目内側", 2: "左目", 3: "左目外側", 
@@ -25,12 +38,52 @@ HEAD_PARTS = {
     7: "左耳", 8: "右耳"
 }
 
+# プレイヤーIDを定義
+player_id = "A"
+
 # カメラを開く
 camera = cv2.VideoCapture(0)
 
 if not camera.isOpened():
     print("カメラを開けませんでした")
     exit()
+
+def on_message(ws, message):
+    global life, game_over, damage_flash
+    data = json.loads(message)
+    print(f"受信メッセージ: {data}")  # デバッグ用にメッセージ内容を出力
+    if data['type'] == 'damage' and data.get('targetId') == player_id:
+        life -= data['damage']
+        damage_flash = True
+        print(f"ダメージを受けました: {data['damage']} (残りライフ: {life})")
+        if life <= 0:
+            game_over = True
+
+def on_open(ws):
+    ws.send(json.dumps({"type": "register", "playerId": player_id}))
+
+def on_error(ws, error):
+    print(f"WebSocketエラー: {error}")
+
+def on_close(ws, close_status_code, close_msg):
+    print("WebSocket接続が閉じられました")
+
+# WebSocketサーバーに接続
+ws = websocket.WebSocketApp(
+    "ws://localhost:8080",
+    on_message=on_message,
+    on_open=on_open,
+    on_error=on_error,
+    on_close=on_close
+)
+
+# WebSocketのスレッドを開始
+ws_thread = threading.Thread(target=ws.run_forever)
+ws_thread.start()
+
+# WebSocketの接続が確立されるまで待機
+while not ws.sock or not ws.sock.connected:
+    pass
 
 while True:
     # フレームを取得
@@ -41,6 +94,15 @@ while True:
 
     # フレームのコピーを作成
     annotated_frame = frame.copy()
+
+    # ダメージを受けた際の赤い点滅
+    if damage_flash:
+        flash_counter += 1
+        if flash_counter % 10 < 5:
+            annotated_frame[:, :, 2] = np.maximum(annotated_frame[:, :, 2], 100)  # 赤色を強調
+        if flash_counter > 20:
+            damage_flash = False
+            flash_counter = 0
 
     # フレームサイズを取得
     frame_height, frame_width = frame.shape[:2]
@@ -113,6 +175,13 @@ while True:
     # スコア表示
     draw.text((10, 10), f"スコア: {score}", font=font, fill=(255, 255, 255))
 
+    # ライフ表示
+    draw.text((10, 90), f"ライフ: {life}", font=font, fill=(255, 255, 255))
+
+    # ゲームオーバー表示
+    if game_over:
+        draw.text((frame_width // 2 - 100, frame_height // 2), "ゲームオーバー", font=font, fill=(255, 0, 0))
+
     # 対象部位名の表示
     if person_in_center:
         if target_part_name == "頭" and specific_head_part:
@@ -132,12 +201,27 @@ while True:
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):  # 'q'キーで終了
         break
-    elif key == ord('b') and person_in_center:  # 'b'キーでスコアを加算
+    elif key == ord('b') and person_in_center and not game_over:  # 'b'キーでスコアを加算
         if target_part_name == "頭":
             score += 2
+            damage = 2
         elif target_part_name == "それ以外":
             score += 1
+            damage = 1
+
+        # ダメージをサーバーに送信
+        target_id = "A"  # ダミーのターゲットID
+        ws.send(json.dumps({"type": "damage", "fromId": player_id, "targetId": target_id, "damage": damage}))
+
+    elif key == ord('d') and not game_over:  # 'd'キーでダメージを受ける（デバッグ用）
+        life -= 1
+        damage_flash = True
+        if life <= 0:
+            game_over = True
 
 # リソースを解放
 camera.release()
 cv2.destroyAllWindows()
+ws.close()
+ws_thread.join()
+
